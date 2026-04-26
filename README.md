@@ -3,6 +3,10 @@
 Generate a [go2rtc](https://github.com/AlexxIT/go2rtc) `go2rtc.yaml`
 configuration from a list of RTSP URLs read on stdin.
 
+## Demo
+
+[![asciicast](https://asciinema.org/a/D1gmXkKO4Do7WO8c.svg)](https://asciinema.org/a/D1gmXkKO4Do7WO8c)
+
 ## Install
 
     chmod +x go2rtc-gen
