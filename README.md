@@ -5,7 +5,9 @@ configuration from a list of RTSP URLs read on stdin.
 
 ## Demo
 
-[![asciicast](https://asciinema.org/a/D1gmXkKO4Do7WO8c.svg)](https://asciinema.org/a/D1gmXkKO4Do7WO8c)
+![demo](demo.gif)
+
+Watch with pause/seek on [asciinema.org](https://asciinema.org/a/D1gmXkKO4Do7WO8c).
 
 ## Install
 
