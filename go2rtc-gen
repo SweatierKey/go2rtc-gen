@@ -1,0 +1,179 @@
+#!/usr/bin/env python3
+"""go2rtc-gen: build a go2rtc.yaml from a list of RTSP URLs on stdin.
+
+One URL per line on stdin → one entry in the `streams:` block, named
+`<prefix>1`, `<prefix>2`, ... in arrival order. Lines that are blank or do
+not start with `rtsp://` are skipped (with a stderr warning for the latter).
+"""
+
+import argparse
+import sys
+from typing import Iterable, List, Tuple
+
+VERSION = "1.0.0"
+PROG = "go2rtc-gen"
+
+EXIT_OK = 0
+EXIT_USAGE = 1
+EXIT_PROTOCOL = 4
+EXIT_INTERRUPT = 130
+
+
+def log(verbose: bool, msg: str) -> None:
+    if verbose:
+        print(f"{PROG}: {msg}", file=sys.stderr)
+
+
+def err(msg: str) -> None:
+    print(f"{PROG}: {msg}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Stream collection
+# ---------------------------------------------------------------------------
+
+def collect_urls(lines: Iterable[str]) -> Tuple[List[str], List[str], bool]:
+    """Return (valid_urls, dropped_lines, saw_any_input).
+
+    Blank lines are silently ignored. Non-blank lines that don't start with
+    `rtsp://` are returned in `dropped_lines` so the caller can decide what
+    to do with them (warning, exit code).
+    """
+    valid: List[str] = []
+    dropped: List[str] = []
+    saw_any = False
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        saw_any = True
+        if line.lower().startswith("rtsp://"):
+            valid.append(line)
+        else:
+            dropped.append(line)
+    return valid, dropped, saw_any
+
+
+# ---------------------------------------------------------------------------
+# YAML emission (hand-rolled — keeps the script stdlib-only)
+# ---------------------------------------------------------------------------
+
+# Characters whose presence requires us to wrap the value in double quotes.
+# Inside a double-quoted YAML scalar we still have to escape \\ and ".
+# RTSP URLs containing percent-encoded credentials, query strings, etc. are
+# safe as plain scalars; we only quote when something would actually break
+# the parse.
+_YAML_NEEDS_QUOTING = set('#&*!|>%@`,[]{}')
+
+
+def _yaml_value(s: str) -> str:
+    needs_quoting = (
+        s == ""
+        or s != s.strip()
+        or s.startswith(":")     # leading ':' is read as a flow indicator
+        or ": " in s             # 'a: b' would parse as a mapping
+        or any(c in _YAML_NEEDS_QUOTING for c in s)
+    )
+    if needs_quoting:
+        return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+    return s
+
+
+def render_yaml(urls: List[str], prefix: str, api_listen: str, rtsp_listen: str) -> str:
+    out = []
+    out.append("api:")
+    out.append(f"  listen: {_yaml_value(api_listen)}")
+    out.append("rtsp:")
+    out.append(f"  listen: {_yaml_value(rtsp_listen)}")
+    out.append("streams:")
+    for i, url in enumerate(urls, start=1):
+        out.append(f"  {prefix}{i}: {_yaml_value(url)}")
+    return "\n".join(out) + "\n"
+
+
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
+
+def write_output(text: str, output_path: str) -> int:
+    if output_path == "-":
+        sys.stdout.write(text)
+        sys.stdout.flush()
+        return EXIT_OK
+    try:
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(text)
+    except OSError as e:
+        err(f"could not write {output_path}: {e.strerror or e}")
+        return EXIT_USAGE
+    return EXIT_OK
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog=PROG,
+        description="Generate a go2rtc.yaml configuration from a list of "
+                    "RTSP URLs read on stdin (one per line).",
+        add_help=False,
+    )
+    p.add_argument("--name-prefix", default="cam", metavar="PREFIX",
+                   help="prefix for stream names: PREFIX1, PREFIX2, ... (default: cam)")
+    p.add_argument("--api-listen", default=":1984", metavar="ADDR",
+                   help='go2rtc api.listen address (default: ":1984")')
+    p.add_argument("--rtsp-listen", default=":8554", metavar="ADDR",
+                   help='go2rtc rtsp.listen address (default: ":8554")')
+    p.add_argument("-o", "--output", default="-", metavar="FILE",
+                   help="write the YAML to FILE instead of stdout")
+    p.add_argument("-v", "--verbose", action="store_true",
+                   help="log progress on stderr")
+    p.add_argument("-V", "--version", action="store_true",
+                   help="print version and exit")
+    p.add_argument("-h", "--help", action="store_true",
+                   help="show this help and exit")
+    return p
+
+
+def main(argv=None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.help:
+        parser.print_help()
+        return EXIT_OK
+    if args.version:
+        print(f"{PROG} {VERSION}")
+        return EXIT_OK
+
+    if not args.name_prefix:
+        err("--name-prefix must not be empty")
+        return EXIT_USAGE
+
+    valid, dropped, saw_any = collect_urls(sys.stdin)
+
+    for line in dropped:
+        err(f"skipped non-RTSP line: {line[:120]}")
+
+    if not saw_any:
+        err("no RTSP URLs on stdin")
+        return EXIT_PROTOCOL
+    if not valid:
+        err("no valid RTSP URLs on stdin")
+        return EXIT_PROTOCOL
+
+    log(args.verbose, f"collected {len(valid)} stream(s), skipped {len(dropped)}")
+    yaml_text = render_yaml(
+        valid, args.name_prefix, args.api_listen, args.rtsp_listen,
+    )
+    return write_output(yaml_text, args.output)
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        err("interrupted")
+        sys.exit(EXIT_INTERRUPT)
